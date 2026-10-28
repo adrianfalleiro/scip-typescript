@@ -12,6 +12,7 @@ import {
   prettyMilliseconds,
   ProjectIndexer,
 } from './ProjectIndexer'
+import { TsrsProgram } from './TsrsProgram'
 
 function minute(x: number): number {
   return x * 60 * 1000
@@ -45,6 +46,28 @@ test('languageForFileName', () => {
   assert.is(languageForFileName('index.jsx'), 'JavaScriptReact')
   assert.is(languageForFileName('package.json'), 'JSON')
   assert.is(languageForFileName('Component.svelte'), undefined)
+})
+
+test('TsrsProgram resolves declaration handles to source nodes', async () => {
+  const fileName = path.resolve('snapshots/input/syntax/src/function.ts')
+  const program = await TsrsProgram.create({
+    fileNames: [fileName],
+    options: { noEmit: true },
+  } as ts.ParsedCommandLine)
+
+  try {
+    const sourceFile = program.getSourceFile(fileName)
+    assert.ok(sourceFile)
+    const position = sourceFile.text.indexOf('newFunction')
+    assert.ok(position >= 0)
+    const symbol = program.checker.getSymbolAtPosition(fileName, position)
+    assert.ok(symbol)
+    const declaration = symbol.declarations[0]?.resolve()
+    assert.ok(declaration)
+    assert.equal(declaration.getSourceFile().fileName, fileName)
+  } finally {
+    program.dispose()
+  }
 })
 
 test('only deduplicates documents after successful emission', () => {
