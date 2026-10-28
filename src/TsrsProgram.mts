@@ -351,7 +351,9 @@ export class TsrsProgram {
       escapedName: native.escapedName as unknown as ts.__String,
       flags: native.flags as unknown as ts.SymbolFlags,
       get declarations() {
-        return native.declarations.map(handle => syntaxNode(handle.resolve()!))
+        return native.declarations.length
+          ? native.declarations.map(handle => syntaxNode(handle.resolve()!))
+          : undefined
       },
       get valueDeclaration() {
         return (

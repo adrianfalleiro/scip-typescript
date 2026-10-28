@@ -180,7 +180,10 @@ export class ProjectIndexer {
       try {
         visitor.index()
       } catch (error) {
-        if (this.options.backend !== 'typescript') throw error
+        if (this.options.backend !== 'typescript')
+          throw new Error(`Failed to index '${sourceFile.fileName}'`, {
+            cause: error,
+          })
         console.error(
           `unexpected error indexing project root '${this.options.cwd}'`,
           error

@@ -49,7 +49,7 @@ test('languageForFileName', () => {
   assert.is(languageForFileName('Component.svelte'), undefined)
 })
 
-test('TsrsProgram resolves declaration handles to source nodes', async () => {
+test('TsrsProgram preserves source declarations and declarationless symbols', async () => {
   const { TsrsProgram } = await import('./TsrsProgram.mjs')
   const fileName = path.resolve('snapshots/input/syntax/src/function.ts')
   const program = new TsrsProgram({
@@ -69,6 +69,15 @@ test('TsrsProgram resolves declaration handles to source nodes', async () => {
     const declaration = symbol.declarations?.[0]
     assert.ok(declaration)
     assert.equal(declaration.getSourceFile().fileName, fileName)
+    const undefinedSymbol = program.checker.resolveName(
+      'undefined',
+      sourceFile,
+      ts.SymbolFlags.Value,
+      false
+    )
+    assert.ok(undefinedSymbol)
+    assert.is(undefinedSymbol.declarations, undefined)
+    assert.is(undefinedSymbol.getDeclarations(), undefined)
   } finally {
     program.dispose()
   }
