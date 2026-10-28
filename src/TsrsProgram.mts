@@ -20,7 +20,6 @@ export class TsrsProgram {
   private readonly program: Program
   private readonly nativeChecker: Checker
   private readonly files = new Map<string, ts.SourceFile>()
-  private readonly syntaxNodes = new Map<string, Map<string, ts.Node>>()
   private readonly nativeNodes = new Map<string, Map<string, NativeNode>>()
   private readonly locationSymbols = new WeakMap<
     ts.Node,
@@ -235,7 +234,6 @@ export class TsrsProgram {
       true
     )
     this.files.set(native.fileName, source)
-    this.ensureNodeMaps(source)
     if (this.rootFiles.has(native.fileName)) {
       // Match FileIndexer's traversal: getChildren() also includes JSDoc tokens
       // (including URLs), whose shapes differ between the two compiler ASTs.
@@ -262,23 +260,9 @@ export class TsrsProgram {
   }
 
   public releaseFile(): void {
-    // Nodes keep their identity for cross-file symbols, but the lookup indexes
+    // Nodes keep their identity for cross-file symbols, but native lookup maps
     // are only needed while visiting a document and can be rebuilt on demand.
-    this.syntaxNodes.clear()
     this.nativeNodes.clear()
-  }
-
-  private ensureNodeMaps(source: ts.SourceFile): void {
-    if (this.syntaxNodes.has(source.fileName)) return
-    const native = this.program.getSourceFile(source.fileName)!
-    this.syntaxNodes.set(
-      source.fileName,
-      TsrsProgram.collect<ts.Node>(source, node => node.kind)
-    )
-    this.nativeNodes.set(
-      source.fileName,
-      TsrsProgram.collect<NativeNode>(native, node => this.syntaxKind(node))
-    )
   }
 
   private syntaxKind(node: NativeNode): number {
@@ -313,10 +297,16 @@ export class TsrsProgram {
 
   private nativeNode(node: ts.Node): NativeNode {
     const fileName = node.getSourceFile().fileName
-    this.ensureNodeMaps(this.getSourceFile(fileName))
-    const result = this.nativeNodes
-      .get(fileName)
-      ?.get(`${node.getStart()}:${node.end}:${node.kind}`)
+    this.getSourceFile(fileName)
+    let nodes = this.nativeNodes.get(fileName)
+    if (!nodes) {
+      nodes = TsrsProgram.collect<NativeNode>(
+        this.program.getSourceFile(fileName)!,
+        node => this.syntaxKind(node)
+      )
+      this.nativeNodes.set(fileName, nodes)
+    }
+    const result = nodes.get(`${node.getStart()}:${node.end}:${node.kind}`)
     if (!result)
       throw new Error(
         `tsrs AST mismatch at ${fileName}:${node.getStart()} (${ts.SyntaxKind[node.kind]})`
@@ -326,15 +316,28 @@ export class TsrsProgram {
 
   private syntaxNode(node: NativeNode): ts.Declaration {
     const fileName = node.getSourceFile().fileName
-    this.ensureNodeMaps(this.getSourceFile(fileName))
-    const result = this.syntaxNodes
-      .get(fileName)
-      ?.get(`${node.getStart()}:${node.end}:${this.syntaxKind(node)}`)
-    if (!result)
-      throw new Error(
-        `TypeScript AST mismatch at ${fileName}:${node.getStart()} (${SyntaxKind[node.kind]})`
+    const source = this.getSourceFile(fileName)
+    const start = node.getStart()
+    const kind = this.syntaxKind(node)
+    // Resolve a declaration through its first token's ancestors instead of
+    // building whole-file maps for every dependency referenced by a document.
+    let result: ts.Node | undefined = (
+      ts as unknown as {
+        getTokenAtPosition(source: ts.SourceFile, position: number): ts.Node
+      }
+    ).getTokenAtPosition(source, start)
+    while (result) {
+      if (
+        result.getStart() === start &&
+        result.end === node.end &&
+        Number(result.kind) === kind
       )
-    return result as ts.Declaration
+        return result as ts.Declaration
+      result = result.parent
+    }
+    throw new Error(
+      `TypeScript AST mismatch at ${fileName}:${start} (${SyntaxKind[node.kind]})`
+    )
   }
 
   private symbol(native: NativeSymbol | undefined): ts.Symbol | undefined {
