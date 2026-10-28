@@ -9,6 +9,7 @@ on:
 
 jobs:
   release-image:
+    if: github.repository == 'sourcegraph/scip-typescript'
     runs-on: ubuntu-latest
     permissions:
       contents: read

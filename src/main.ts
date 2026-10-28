@@ -19,17 +19,17 @@ import { inferTsconfig } from './inferTsconfig'
 import { ProjectIndexer } from './ProjectIndexer'
 import * as scip from './scip'
 
-export function main(): void {
-  mainCommand((projects, options) => indexCommand(projects, options)).parse(
-    process.argv
-  )
+export async function main(): Promise<void> {
+  await mainCommand((projects, options) =>
+    indexCommand(projects, options)
+  ).parseAsync(process.argv)
   return
 }
 
-export function indexCommand(
+export async function indexCommand(
   projects: string[],
   options: MultiProjectOptions
-): void {
+): Promise<void> {
   if (options.yarnWorkspaces) {
     projects.push(...listYarnWorkspaces(options.cwd, 'tryYarn1'))
   } else if (options.yarnBerryWorkspaces) {
@@ -46,6 +46,7 @@ export function indexCommand(
   }
   const output = fs.openSync(options.output, 'w')
   let documentCount = 0
+  let completed = false
   const writeIndex = (index: scip.scip.Index): void => {
     documentCount += index.documents.length
     fs.writeSync(output, index.serializeBinary())
@@ -65,7 +66,7 @@ export function indexCommand(
           tool_info: new scip.scip.ToolInfo({
             name: 'scip-typescript',
             version: packageJson.version,
-            arguments: [],
+            arguments: ['--backend', options.backend ?? 'tsrs'],
           }),
         }),
       })
@@ -75,7 +76,7 @@ export function indexCommand(
     // they can have dependencies.
     for (const projectRoot of projects) {
       const projectDisplayName = projectRoot === '.' ? options.cwd : projectRoot
-      indexSingleProject(
+      await indexSingleProject(
         {
           ...options,
           projectRoot,
@@ -85,17 +86,20 @@ export function indexCommand(
         cache
       )
     }
+    completed = true
   } finally {
-    fs.close(output)
-    if (documentCount > 0) {
+    fs.closeSync(output)
+    if (completed && documentCount > 0) {
       console.log(`done ${options.output}`)
     } else {
       process.exitCode = 1
       fs.rmSync(options.output)
-      const prettyProjects = JSON.stringify(projects)
-      console.log(
-        `error: no files got indexed. To fix this problem, make sure that the TypeScript projects ${prettyProjects} contain input files or reference other projects.`
-      )
+      if (completed) {
+        const prettyProjects = JSON.stringify(projects)
+        console.log(
+          `error: no files got indexed. To fix this problem, make sure that the TypeScript projects ${prettyProjects} contain input files or reference other projects.`
+        )
+      }
     }
   }
 }
@@ -107,7 +111,10 @@ function makeAbsolutePath(cwd: string, relativeOrAbsolutePath: string): string {
   return path.resolve(cwd, relativeOrAbsolutePath)
 }
 
-function indexSingleProject(options: ProjectOptions, cache: GlobalCache): void {
+async function indexSingleProject(
+  options: ProjectOptions,
+  cache: GlobalCache
+): Promise<void> {
   if (options.indexedProjects.has(options.projectRoot)) {
     return
   }
@@ -140,7 +147,7 @@ function indexSingleProject(options: ProjectOptions, cache: GlobalCache): void {
   }
 
   for (const projectReference of config.projectReferences || []) {
-    indexSingleProject(
+    await indexSingleProject(
       {
         ...options,
         projectRoot: projectReference.path,
@@ -151,12 +158,25 @@ function indexSingleProject(options: ProjectOptions, cache: GlobalCache): void {
   }
 
   if (config.fileNames.length > 0) {
-    new ProjectIndexer(config, options, cache).index()
+    if (options.backend !== 'typescript') {
+      const { TsrsProgram } = await import('./TsrsProgram.mjs')
+      const backend = new TsrsProgram(config, options.tsrsPath)
+      try {
+        new ProjectIndexer(config, options, cache, backend).index()
+      } finally {
+        backend.dispose()
+      }
+    } else {
+      new ProjectIndexer(config, options, cache).index()
+    }
   }
 }
 
 if (require.main === module) {
-  main()
+  main().catch(error => {
+    console.error(error)
+    process.exitCode = 1
+  })
 }
 
 function loadConfigFile(file: string): ts.ParsedCommandLine | undefined {

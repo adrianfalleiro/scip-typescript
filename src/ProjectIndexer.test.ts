@@ -12,7 +12,8 @@ import {
   prettyMilliseconds,
   ProjectIndexer,
 } from './ProjectIndexer'
-import { TsrsProgram } from './TsrsProgram'
+import { indexCommand } from './main'
+import { scip } from './scip'
 
 function minute(x: number): number {
   return x * 60 * 1000
@@ -49,8 +50,9 @@ test('languageForFileName', () => {
 })
 
 test('TsrsProgram resolves declaration handles to source nodes', async () => {
+  const { TsrsProgram } = await import('./TsrsProgram.mjs')
   const fileName = path.resolve('snapshots/input/syntax/src/function.ts')
-  const program = await TsrsProgram.create({
+  const program = new TsrsProgram({
     fileNames: [fileName],
     options: { noEmit: true },
   } as ts.ParsedCommandLine)
@@ -60,9 +62,11 @@ test('TsrsProgram resolves declaration handles to source nodes', async () => {
     assert.ok(sourceFile)
     const position = sourceFile.text.indexOf('newFunction')
     assert.ok(position >= 0)
-    const symbol = program.checker.getSymbolAtPosition(fileName, position)
+    const node = sourceFile.statements[0] as ts.FunctionDeclaration
+    assert.equal(node.name!.getStart(), position)
+    const symbol = program.checker.getSymbolAtLocation(node.name!)
     assert.ok(symbol)
-    const declaration = symbol.declarations[0]?.resolve()
+    const declaration = symbol.declarations?.[0]
     assert.ok(declaration)
     assert.equal(declaration.getSourceFile().fileName, fileName)
   } finally {
@@ -111,6 +115,145 @@ test('only deduplicates documents after successful emission', () => {
     assert.not.ok(cache.indexedFiles.has(fileName))
   } finally {
     fs.rmSync(projectRoot, { recursive: true })
+  }
+})
+
+test('native CLI emits closure hovers and UTF-16 reference ranges', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scip-tsrs-cli-'))
+  try {
+    fs.writeFileSync(
+      path.join(cwd, 'tsconfig.json'),
+      JSON.stringify({ files: ['index.ts'] })
+    )
+    const callLine =
+      "const emoji = '😀'; export const result = closure(emoji)()"
+    fs.writeFileSync(
+      path.join(cwd, 'index.ts'),
+      [
+        '/** Return a closure. */',
+        'export function closure(value: string): () => number {',
+        '  return () => value.length',
+        '}',
+        callLine,
+      ].join('\n')
+    )
+    const output = path.join(cwd, 'index.scip')
+    await indexCommand([], {
+      cwd,
+      output,
+      inferTsconfig: false,
+      progressBar: false,
+      yarnWorkspaces: false,
+      yarnBerryWorkspaces: false,
+      pnpmWorkspaces: false,
+      globalCaches: true,
+      indexedProjects: new Set(),
+    })
+    const index = scip.Index.deserializeBinary(fs.readFileSync(output))
+    assert.equal(index.documents.length, 1)
+    assert.equal(index.metadata?.tool_info?.arguments, ['--backend', 'tsrs'])
+    const document = index.documents[0]
+    const closure = document.symbols.find(symbol =>
+      symbol.symbol.endsWith('/closure().')
+    )
+    assert.ok(closure)
+    assert.equal(closure.documentation, [
+      '```ts\nfunction closure(value: string): () => number\n```',
+      'Return a closure.',
+    ])
+    const position = callLine.indexOf('closure')
+    assert.equal(
+      document.occurrences
+        .filter(
+          occurrence =>
+            occurrence.symbol === closure.symbol &&
+            occurrence.symbol_roles === 0
+        )
+        .map(occurrence => occurrence.range),
+      [[4, position, position + 'closure'.length]]
+    )
+  } finally {
+    fs.rmSync(cwd, { recursive: true })
+  }
+})
+
+test('failed native compiler startup removes a partially written index', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scip-tsrs-failure-'))
+  const previousExitCode = process.exitCode
+  try {
+    fs.writeFileSync(
+      path.join(cwd, 'tsconfig.json'),
+      JSON.stringify({ files: ['index.ts'] })
+    )
+    fs.writeFileSync(path.join(cwd, 'index.ts'), 'export const value = 1')
+    const output = path.join(cwd, 'index.scip')
+    let failure: unknown
+    try {
+      await indexCommand([], {
+        cwd,
+        output,
+        tsrsPath: path.join(cwd, 'missing-native-compiler'),
+        inferTsconfig: false,
+        progressBar: false,
+        yarnWorkspaces: false,
+        yarnBerryWorkspaces: false,
+        pnpmWorkspaces: false,
+        globalCaches: true,
+        indexedProjects: new Set(),
+      })
+    } catch (error) {
+      failure = error
+    }
+    assert.instance(failure, Error)
+    assert.match((failure as Error).message, /ENOENT|spawn|executable/i)
+    assert.equal(fs.existsSync(output), false)
+    assert.equal(process.exitCode, 1)
+  } finally {
+    process.exitCode = previousExitCode
+    fs.rmSync(cwd, { recursive: true })
+  }
+})
+
+test('failure in a later project removes documents emitted by earlier projects', async () => {
+  const cwd = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'scip-tsrs-project-failure-')
+  )
+  const previousExitCode = process.exitCode
+  try {
+    const first = path.join(cwd, 'first')
+    const second = path.join(cwd, 'second')
+    fs.mkdirSync(first)
+    fs.mkdirSync(second)
+    fs.writeFileSync(
+      path.join(first, 'tsconfig.json'),
+      JSON.stringify({ files: ['index.ts'] })
+    )
+    fs.writeFileSync(path.join(first, 'index.ts'), 'export const value = 1')
+    fs.writeFileSync(path.join(second, 'tsconfig.json'), '{')
+    const output = path.join(cwd, 'index.scip')
+    let failure: unknown
+    try {
+      await indexCommand([first, second], {
+        cwd,
+        output,
+        inferTsconfig: false,
+        progressBar: false,
+        yarnWorkspaces: false,
+        yarnBerryWorkspaces: false,
+        pnpmWorkspaces: false,
+        globalCaches: true,
+        indexedProjects: new Set(),
+      })
+    } catch (error) {
+      failure = error
+    }
+    assert.instance(failure, Error)
+    assert.match((failure as Error).message, /second[/\\]tsconfig\.json/)
+    assert.equal(fs.existsSync(output), false)
+    assert.equal(process.exitCode, 1)
+  } finally {
+    process.exitCode = previousExitCode
+    fs.rmSync(cwd, { recursive: true })
   }
 })
 

@@ -68,7 +68,7 @@ function createCompilerHost(
 }
 
 export class ProjectIndexer {
-  private program: ts.Program
+  private program: Pick<ts.Program, 'getSourceFiles'>
   private checker: ts.TypeChecker
   private symbolCache: Map<ts.Node, ScipSymbol> = new Map()
   private hasConstructor: Map<ts.ClassDeclaration, boolean> = new Map()
@@ -77,11 +77,18 @@ export class ProjectIndexer {
   constructor(
     public readonly config: ts.ParsedCommandLine,
     public readonly options: ProjectOptions,
-    cache: GlobalCache
+    cache: GlobalCache,
+    backend?: { getSourceFiles(): ts.SourceFile[]; checker: ts.TypeChecker }
   ) {
-    const host = createCompilerHost(cache, config.options, options)
-    this.program = ts.createProgram(config.fileNames, config.options, host)
-    this.checker = this.program.getTypeChecker()
+    if (backend) {
+      this.program = backend
+      this.checker = backend.checker
+    } else {
+      const host = createCompilerHost(cache, config.options, options)
+      const program = ts.createProgram(config.fileNames, config.options, host)
+      this.program = program
+      this.checker = program.getTypeChecker()
+    }
     this.packages = new Packages(options.projectRoot)
     this.indexedFiles = cache.indexedFiles
   }
@@ -160,6 +167,7 @@ export class ProjectIndexer {
       try {
         visitor.index()
       } catch (error) {
+        if (this.options.backend !== 'typescript') throw error
         console.error(
           `unexpected error indexing project root '${this.options.cwd}'`,
           error

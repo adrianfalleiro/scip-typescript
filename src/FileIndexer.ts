@@ -224,7 +224,11 @@ export class FileIndexer {
             // export interface Conflict {}
             //                  ^^^^^^^^ "Go to definition" shows two results: const and interface.
             // See https://github.com/sourcegraph/scip-typescript/pull/206 for more details.
-            [node.parent]
+            [
+              ts.isComputedPropertyName(node.parent)
+                ? node.parent.parent
+                : node.parent,
+            ]
           : sym?.declarations || []
     }
     for (const declaration of declarations) {
@@ -1222,6 +1226,9 @@ function declarationName(node: ts.Node): ts.Node | undefined {
  */
 function isDefinition(node: ts.Node): boolean {
   return (
-    declarationName(node.parent) === node || ts.isConstructorDeclaration(node)
+    declarationName(node.parent) === node ||
+    (ts.isComputedPropertyName(node.parent) &&
+      declarationName(node.parent.parent) === node.parent) ||
+    ts.isConstructorDeclaration(node)
   )
 }

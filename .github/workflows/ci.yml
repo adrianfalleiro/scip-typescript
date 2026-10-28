@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - codex/tsrs-migration
   pull_request:
 jobs:
   test:

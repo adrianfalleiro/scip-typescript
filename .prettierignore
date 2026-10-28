@@ -2,4 +2,5 @@ dist
 node_modules
 src/scip.ts
 snapshots/output
+snapshots/output-tsrs
 **/pnpm-lock.yaml
