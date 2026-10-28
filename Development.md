@@ -25,6 +25,13 @@ npm run eslint
 npm run update-snapshots
 ```
 
+Every snapshot fixture runs with both the TypeScript baseline and the tsrs
+backend. `snapshots/output/` is shared; `snapshots/output-tsrs/` contains only
+intentional TypeScript 7 differences. To verify or regenerate native expectations
+using the matching reference compiler, set `SCIP_TEST_TSRS_PATH` to its executable
+when running the test suite. Use exactly the TypeScript source commit pinned in
+README.md. A different compiler version is not a valid parity oracle.
+
 ## Debugging
 
 ### Print debugging

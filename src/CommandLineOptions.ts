@@ -1,4 +1,4 @@
-import { Command } from 'commander'
+import { Command, Option } from 'commander'
 import ts from 'typescript'
 
 import packageJson from '../package.json'
@@ -8,6 +8,8 @@ import * as scip from './scip'
 
 /** Configuration options to index a multi-project workspace. */
 export interface MultiProjectOptions {
+  backend?: 'typescript' | 'tsrs'
+  tsrsPath?: string
   inferTsconfig: boolean
   progressBar: boolean
   yarnWorkspaces: boolean
@@ -39,18 +41,30 @@ export interface GlobalCache {
 }
 
 export function mainCommand(
-  indexAction: (projects: string[], options: MultiProjectOptions) => void
+  indexAction: (
+    projects: string[],
+    options: MultiProjectOptions
+  ) => void | Promise<void>
 ): Command {
   const command = new Command()
   command
     .name('scip-typescript')
     .version(packageJson.version)
     .description(
-      'SCIP indexer for TypeScript and JavaScript\nFor usage examples, see https://github.com/sourcegraph/scip-typescript/blob/main/README.md'
+      'SCIP indexer for TypeScript and JavaScript using tsrs\nFor usage examples, see https://github.com/adrianfalleiro/scip-typescript/blob/codex/tsrs-migration/README.md'
     )
   command
     .command('index')
+    .addOption(
+      new Option('--backend <compiler>', 'semantic compiler backend')
+        .choices(['typescript', 'tsrs'])
+        .default('tsrs')
+    )
     .option('--cwd <path>', 'the working directory', process.cwd())
+    .option(
+      '--tsrs-path <path>',
+      'override the native compiler executable (for testing compiler builds)'
+    )
     .option('--pnpm-workspaces', 'whether to index all pnpm workspaces', false)
     .option('--yarn-workspaces', 'whether to index all yarn workspaces', false)
     .option(
@@ -91,7 +105,7 @@ export function mainCommand(
         return
       }
 
-      indexAction(parsedProjects as string[], options)
+      return indexAction(parsedProjects as string[], options)
     })
   return command
 }

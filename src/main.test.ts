@@ -44,145 +44,172 @@ for (const snapshotDirectory of snapshotDirectories) {
   if (!fs.statSync(inputRoot).isDirectory()) {
     continue
   }
-  test(snapshotDirectory, () => {
-    const packageJsonPath = path.join(inputRoot, 'package.json')
-    const packageJson = JSON.parse(
-      fs.readFileSync(packageJsonPath).toString()
-    ) as PackageJson
-    const tsconfigJsonPath = path.join(inputRoot, 'tsconfig.json')
-    const inferTsconfig = !fs.existsSync(tsconfigJsonPath)
-    const output = path.join(inputRoot, 'index.scip')
-    indexCommand([], {
-      cwd: inputRoot,
-      inferTsconfig,
-      output,
-      yarnWorkspaces: Boolean(packageJson.workspaces),
-      yarnBerryWorkspaces: false,
-      pnpmWorkspaces: Boolean(packageJson.packageManager?.includes('pnpm')),
-      progressBar: false,
-      indexedProjects: new Set(),
-      globalCaches: true,
-    })
-    if (inferTsconfig) {
-      fs.rmSync(tsconfigJsonPath)
-    }
-    const index = scip.scip.Index.deserializeBinary(
-      fs.readFileSync(path.join(inputRoot, 'index.scip'))
-    )
-    fs.mkdirSync(outputRoot, { recursive: true })
-    fs.renameSync(output, path.join(outputRoot, 'index.scip'))
-    if (index.documents.length === 0) {
-      throw new Error('empty LSIF index')
-    }
-    const documentPaths = new Set<string>()
-    const duplicateDocuments: string[] = []
-    for (const document of index.documents) {
-      if (documentPaths.has(document.relative_path)) {
-        duplicateDocuments.push(document.relative_path)
+  for (const backend of ['typescript', 'tsrs'] as const) {
+    test(`${backend}: ${snapshotDirectory}`, async () => {
+      const packageJsonPath = path.join(inputRoot, 'package.json')
+      const packageJson = JSON.parse(
+        fs.readFileSync(packageJsonPath).toString()
+      ) as PackageJson
+      const tsconfigJsonPath = path.join(inputRoot, 'tsconfig.json')
+      const inferTsconfig = !fs.existsSync(tsconfigJsonPath)
+      const output = path.join(inputRoot, 'index.scip')
+      await indexCommand([], {
+        backend,
+        tsrsPath: process.env.SCIP_TEST_TSRS_PATH,
+        cwd: inputRoot,
+        inferTsconfig,
+        output,
+        yarnWorkspaces: Boolean(packageJson.workspaces),
+        yarnBerryWorkspaces: false,
+        pnpmWorkspaces: Boolean(packageJson.packageManager?.includes('pnpm')),
+        progressBar: false,
+        indexedProjects: new Set(),
+        globalCaches: true,
+      })
+      if (inferTsconfig) {
+        fs.rmSync(tsconfigJsonPath)
       }
-      documentPaths.add(document.relative_path)
-    }
-    assert.equal(duplicateDocuments, [], 'SCIP document paths should be unique')
-    const symbolInformation = new Set(
-      index.documents.flatMap(document =>
-        document.symbols.map(symbol => symbol.symbol)
+      const index = scip.scip.Index.deserializeBinary(
+        fs.readFileSync(path.join(inputRoot, 'index.scip'))
       )
-    )
-    const indexedPackages = new Set(
-      [...symbolInformation]
-        .filter(symbol => !symbol.startsWith('local '))
-        .map(symbolPackage)
-    )
-    for (const document of index.documents) {
-      const symbols = new Set<string>()
-      const duplicateSymbols: string[] = []
-      for (const symbol of document.symbols) {
-        if (symbols.has(symbol.symbol)) {
-          duplicateSymbols.push(symbol.symbol)
+      fs.mkdirSync(outputRoot, { recursive: true })
+      fs.renameSync(output, path.join(outputRoot, 'index.scip'))
+      if (index.documents.length === 0) {
+        throw new Error('empty LSIF index')
+      }
+      const documentPaths = new Set<string>()
+      const duplicateDocuments: string[] = []
+      for (const document of index.documents) {
+        if (documentPaths.has(document.relative_path)) {
+          duplicateDocuments.push(document.relative_path)
         }
-        symbols.add(symbol.symbol)
+        documentPaths.add(document.relative_path)
       }
       assert.equal(
-        duplicateSymbols,
+        duplicateDocuments,
         [],
-        `${document.relative_path} should not contain duplicate SymbolInformation`
+        'SCIP document paths should be unique'
       )
-      const occurrences = new Set<string>()
-      const duplicateOccurrences: string[] = []
-      for (const occurrence of document.occurrences) {
-        const key = `${occurrence.range.join(':')} ${occurrence.symbol_roles} ${occurrence.symbol}`
-        if (occurrences.has(key)) {
-          duplicateOccurrences.push(key)
-        }
-        occurrences.add(key)
-      }
-      assert.equal(
-        duplicateOccurrences,
-        [],
-        `${document.relative_path} should not contain duplicate occurrences`
-      )
-      const missingInternalSymbols = document.occurrences
-        .map(occurrence => occurrence.symbol)
-        .filter(
-          symbol =>
-            symbol &&
-            indexedPackages.has(symbolPackage(symbol)) &&
-            !symbolInformation.has(symbol)
+      const symbolInformation = new Set(
+        index.documents.flatMap(document =>
+          document.symbols.map(symbol => symbol.symbol)
         )
-      assert.equal(
-        missingInternalSymbols,
-        [],
-        `${document.relative_path} occurrences in indexed packages should have SymbolInformation`
       )
-      assert.ok(
-        document.language,
-        `${document.relative_path} should have a SCIP document language`
+      const indexedPackages = new Set(
+        [...symbolInformation]
+          .filter(symbol => !symbol.startsWith('local '))
+          .map(symbolPackage)
       )
-      if (document.relative_path === 'src/symbol-kinds.ts') {
+      for (const document of index.documents) {
+        const symbols = new Set<string>()
+        const duplicateSymbols: string[] = []
+        for (const symbol of document.symbols) {
+          if (symbols.has(symbol.symbol)) {
+            duplicateSymbols.push(symbol.symbol)
+          }
+          symbols.add(symbol.symbol)
+        }
         assert.equal(
-          document.symbols
-            .filter(
-              symbol =>
-                symbol.kind === scip.scip.SymbolInformation.Kind.UnspecifiedKind
-            )
-            .map(symbol => symbol.symbol),
+          duplicateSymbols,
           [],
-          'all symbols in the symbol-kind fixture should have a SCIP kind'
+          `${document.relative_path} should not contain duplicate SymbolInformation`
         )
-      }
-      const inputPath = path.join(inputRoot, document.relative_path)
-      const relativeToInputDirectory = path.relative(inputDirectory, inputPath)
-      const outputPath = path.resolve(outputDirectory, relativeToInputDirectory)
-      const expected: string = fs.existsSync(outputPath)
-        ? fs.readFileSync(outputPath).toString()
-        : ''
-      const input = Input.fromFile(inputPath)
-      const obtained = formatSnapshot(input, document)
-      if (obtained === expected) {
-        // Test passed
-        continue
-      }
-      if (isUpdate) {
-        // Update the snapshot test to reflect the new behavior
-        fs.mkdirSync(path.dirname(outputPath), {
-          recursive: true,
-        })
-        fs.writeFileSync(outputPath, obtained)
-        console.log(`updated snapshot: ${outputPath}`)
-      } else {
-        // Fail the test with a diff error message
-        const patch = Diff.createTwoFilesPatch(
-          outputPath,
-          outputPath,
-          expected,
-          obtained,
-          '(what the snapshot tests expect)',
-          "(what the current code produces). Run the command 'npm run update-snapshots' to accept the new behavior."
+        const occurrences = new Set<string>()
+        const duplicateOccurrences: string[] = []
+        for (const occurrence of document.occurrences) {
+          const key = `${occurrence.range.join(':')} ${occurrence.symbol_roles} ${occurrence.symbol}`
+          if (occurrences.has(key)) {
+            duplicateOccurrences.push(key)
+          }
+          occurrences.add(key)
+        }
+        assert.equal(
+          duplicateOccurrences,
+          [],
+          `${document.relative_path} should not contain duplicate occurrences`
         )
-        throw new Error(patch)
+        const missingInternalSymbols = document.occurrences
+          .map(occurrence => occurrence.symbol)
+          .filter(
+            symbol =>
+              symbol &&
+              indexedPackages.has(symbolPackage(symbol)) &&
+              !symbolInformation.has(symbol)
+          )
+        assert.equal(
+          missingInternalSymbols,
+          [],
+          `${document.relative_path} occurrences in indexed packages should have SymbolInformation`
+        )
+        assert.ok(
+          document.language,
+          `${document.relative_path} should have a SCIP document language`
+        )
+        if (document.relative_path === 'src/symbol-kinds.ts') {
+          assert.equal(
+            document.symbols
+              .filter(
+                symbol =>
+                  symbol.kind ===
+                  scip.scip.SymbolInformation.Kind.UnspecifiedKind
+              )
+              .map(symbol => symbol.symbol),
+            [],
+            'all symbols in the symbol-kind fixture should have a SCIP kind'
+          )
+        }
+        const inputPath = path.join(inputRoot, document.relative_path)
+        const relativeToInputDirectory = path.relative(
+          inputDirectory,
+          inputPath
+        )
+        const baselinePath = path.resolve(
+          outputDirectory,
+          relativeToInputDirectory
+        )
+        const nativePath = path.resolve(
+          outputDirectory,
+          '../output-tsrs',
+          relativeToInputDirectory
+        )
+        const outputPath =
+          backend === 'tsrs' && !isUpdate && fs.existsSync(nativePath)
+            ? nativePath
+            : baselinePath
+        const expected: string = fs.existsSync(outputPath)
+          ? fs.readFileSync(outputPath).toString()
+          : ''
+        const input = Input.fromFile(inputPath)
+        const obtained = formatSnapshot(input, document)
+        if (obtained === expected) {
+          if (isUpdate && backend === 'tsrs' && fs.existsSync(nativePath))
+            fs.rmSync(nativePath)
+          // Test passed
+          continue
+        }
+        if (isUpdate) {
+          const updatePath = backend === 'tsrs' ? nativePath : baselinePath
+          // Update the snapshot test to reflect the new behavior
+          fs.mkdirSync(path.dirname(updatePath), {
+            recursive: true,
+          })
+          fs.writeFileSync(updatePath, obtained)
+          console.log(`updated snapshot: ${updatePath}`)
+        } else {
+          // Fail the test with a diff error message
+          const patch = Diff.createTwoFilesPatch(
+            outputPath,
+            outputPath,
+            expected,
+            obtained,
+            '(what the snapshot tests expect)',
+            "(what the current code produces). Run the command 'npm run update-snapshots' to accept the new behavior."
+          )
+          throw new Error(patch)
+        }
       }
-    }
-  })
+    })
+  }
 }
 
 function symbolPackage(symbol: string): string {

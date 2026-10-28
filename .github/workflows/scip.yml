@@ -6,6 +6,7 @@ on:
   pull_request:
 jobs:
   test:
+    if: github.repository == 'sourcegraph/scip-typescript'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

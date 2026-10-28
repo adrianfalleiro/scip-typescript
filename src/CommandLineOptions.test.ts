@@ -24,6 +24,7 @@ function checkIndexParser(
 
 // defaults
 checkIndexParser([], {
+  backend: 'tsrs',
   cwd: process.cwd(),
   inferTsconfig: false,
   output: 'index.scip',
@@ -31,6 +32,9 @@ checkIndexParser([], {
 })
 
 checkIndexParser(['--cwd', 'qux'], { cwd: 'qux' })
+checkIndexParser(['--backend', 'tsrs'], { backend: 'tsrs' })
+checkIndexParser(['--backend', 'typescript'], { backend: 'typescript' })
+checkIndexParser(['--tsrs-path', '/tmp/tsrs'], { tsrsPath: '/tmp/tsrs' })
 checkIndexParser(['--yarn-workspaces'], { yarnWorkspaces: true })
 checkIndexParser(['--pnpm-workspaces'], { pnpmWorkspaces: true })
 checkIndexParser(['--infer-tsconfig'], { inferTsconfig: true })

@@ -20,7 +20,7 @@ Connection.prototype = {
   'schema-version': 2,
 //^^^^^^^^^^^^^^^^ definition prototype-members 1.0.0 src/`connection.mjs`/Connection().schema-version.
   ['computed-version']: 3,
-// ^^^^^^^^^^^^^^^^^^ reference prototype-members 1.0.0 src/`connection.mjs`/Connection().computed-version.
+// ^^^^^^^^^^^^^^^^^^ definition prototype-members 1.0.0 src/`connection.mjs`/Connection().computed-version.
 }
 
 // Different spellings of the same property must share one symbol.

@@ -1,13 +1,38 @@
-# scip-typescript
+# scip-typescript — tsrs fork
 
 [SCIP](https://github.com/sourcegraph/scip) indexer for TypeScript and JavaScript.
+
+This fork uses [`tsrs`](https://github.com/oxc-project/tsrs), a Rust port of the
+TypeScript 7 compiler, for symbol and type resolution by default. It reuses the
+upstream SCIP emitter through a compiler API adapter. TypeScript is retained for
+tsconfig parsing, syntax nodes, and standard-library declarations; the tsrs
+backend never creates a TypeScript checker or falls back to one.
+
+The pinned compiler is `tsrs@0.20.1-ts7.1.0-beta`. Its TypeScript 7 semantics
+include intentional changes from TypeScript 6: legacy constructor-function and
+prototype-member inference is no longer supported. See Microsoft's
+[JavaScript compatibility notes](https://github.com/microsoft/typescript-go/blob/main/CHANGES.md).
+Such code can have fewer references than the upstream TypeScript 6 indexer.
+Lone-surrogate string types also have escaped hover text. The snapshot suite
+tests both backends, sharing expected output except for these documented
+differences. Native expectations were verified with the pinned Go reference
+compiler (`3e9236361fa97a9e6c685f4833ac457ae2d8c50a`).
+
+Use `--backend typescript` only when explicitly comparing with the original
+indexer. `--tsrs-path /path/to/tsrs` selects a custom native compiler build.
+No performance improvement is claimed: the adapter makes synchronous semantic
+queries and still parses syntax in JavaScript.
 
 ## Quick start
 
 ### Installation
 
 ```sh
-npm install -g @sourcegraph/scip-typescript
+git clone --branch codex/tsrs-migration https://github.com/adrianfalleiro/scip-typescript.git
+cd scip-typescript
+yarn install --frozen-lockfile
+yarn build
+yarn link
 ```
 
 Currently, Node v22 and Node v24 are supported. <!-- Source of truth: .github/workflows/ci.yml -->
@@ -58,7 +83,8 @@ scip-typescript index --pnpm-workspaces
 Add the following run steps to your CI pipeline:
 
 ```sh
-npm install -g @sourcegraph/scip-typescript @sourcegraph/src
+# Build/link this fork as above, then install the uploader:
+npm install -g @sourcegraph/src
 npm install # or yarn install
 scip-typescript index
 # Upload index with any necessary tokens (shown here using GitHub workflow syntax)
