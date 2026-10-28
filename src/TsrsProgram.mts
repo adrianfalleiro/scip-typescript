@@ -10,6 +10,7 @@ import {
   type Signature as NativeSignature,
   type RawCompilerOptions,
   SymbolFlags,
+  NodeBuilderFlags,
 } from 'tsrs/sync'
 import { type Node as NativeNode, SyntaxKind } from 'tsrs/ast'
 
@@ -200,7 +201,11 @@ export class TsrsProgram {
         const native = this.nativeSignatures.get(signature)!
         const declaration = this.nativeChecker.signatureToSignatureDeclaration(
           native,
-          SyntaxKind.CallSignature
+          SyntaxKind.CallSignature,
+          undefined,
+          // Match the reference compiler's signatureToString formatting flags.
+          NodeBuilderFlags.IgnoreErrors |
+            NodeBuilderFlags.WriteTypeParametersInQualifiedName
         )
         if (!declaration) throw new Error('tsrs could not print a signature')
         const printed = this.api.printer.printNode(declaration)

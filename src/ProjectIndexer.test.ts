@@ -194,6 +194,63 @@ test('native CLI preserves JSDoc URLs, qualified heritage and UTF-16 references'
   }
 })
 
+test('native CLI prints signatures returning nested dependency modules', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scip-tsrs-signature-'))
+  try {
+    fs.mkdirSync(path.join(cwd, 'node_modules/factory/node_modules/hidden'), {
+      recursive: true,
+    })
+    const files = {
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext' },
+        files: ['index.ts'],
+      }),
+      'index.ts':
+        'import { make } from "factory"; export function create() { return make() }',
+      'node_modules/factory/package.json': JSON.stringify({
+        name: 'factory',
+        version: '1.0.0',
+        types: 'index.d.ts',
+      }),
+      'node_modules/factory/index.d.ts':
+        'export function make(): typeof import("hidden");',
+      'node_modules/factory/node_modules/hidden/package.json': JSON.stringify({
+        name: 'hidden',
+        version: '1.0.0',
+        types: 'index.d.ts',
+      }),
+      'node_modules/factory/node_modules/hidden/index.d.ts':
+        'export const value: string;',
+    }
+    for (const [name, text] of Object.entries(files))
+      fs.writeFileSync(path.join(cwd, name), text)
+    const output = path.join(cwd, 'index.scip')
+    await indexCommand([], {
+      cwd,
+      output,
+      inferTsconfig: false,
+      progressBar: false,
+      yarnWorkspaces: false,
+      yarnBerryWorkspaces: false,
+      pnpmWorkspaces: false,
+      globalCaches: true,
+      indexedProjects: new Set(),
+    })
+    const index = scip.Index.deserializeBinary(fs.readFileSync(output))
+    assert.equal(index.documents.length, 1)
+    const documentation = index.documents[0].symbols.find(symbol =>
+      symbol.symbol.endsWith('/create().')
+    )?.documentation
+    assert.equal(documentation?.length, 1)
+    assert.match(
+      documentation![0],
+      /^```ts\nfunction create\(\): typeof import\("[^"]*\/node_modules\/factory\/node_modules\/hidden\/index"\)\n```$/
+    )
+  } finally {
+    fs.rmSync(cwd, { recursive: true })
+  }
+})
+
 test('failed native compiler startup removes a partially written index', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scip-tsrs-failure-'))
   const previousExitCode = process.exitCode
