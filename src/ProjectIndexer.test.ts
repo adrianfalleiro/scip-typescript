@@ -118,7 +118,7 @@ test('only deduplicates documents after successful emission', () => {
   }
 })
 
-test('native CLI emits closure hovers and UTF-16 reference ranges', async () => {
+test('native CLI preserves JSDoc URLs, qualified heritage and UTF-16 references', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scip-tsrs-cli-'))
   try {
     fs.writeFileSync(
@@ -130,11 +130,17 @@ test('native CLI emits closure hovers and UTF-16 reference ranges', async () => 
     fs.writeFileSync(
       path.join(cwd, 'index.ts'),
       [
-        '/** Return a closure. */',
+        '/**',
+        ' * Return a closure.',
+        ' * @see https://example.com/reference#details',
+        ' */',
         'export function closure(value: string): () => number {',
         '  return () => value.length',
         '}',
         callLine,
+        'export namespace shapes { export interface Base<T> { value: T } }',
+        'export interface Derived extends shapes.Base<string> {}',
+        "export class Implementation implements Derived { value = '' }",
       ].join('\n')
     )
     const output = path.join(cwd, 'index.scip')
@@ -170,7 +176,18 @@ test('native CLI emits closure hovers and UTF-16 reference ranges', async () => 
             occurrence.symbol_roles === 0
         )
         .map(occurrence => occurrence.range),
-      [[4, position, position + 'closure'.length]]
+      [[7, position, position + 'closure'.length]]
+    )
+    const implementation = document.symbols.find(symbol =>
+      symbol.symbol.endsWith('/Implementation#')
+    )
+    assert.ok(implementation)
+    assert.equal(
+      implementation.relationships.map(relationship => relationship.symbol),
+      [
+        'scip-typescript npm . . `index.ts`/Derived#',
+        'scip-typescript npm . . `index.ts`/shapes/Base#',
+      ]
     )
   } finally {
     fs.rmSync(cwd, { recursive: true })

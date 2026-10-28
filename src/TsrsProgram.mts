@@ -212,11 +212,10 @@ export class TsrsProgram {
     this.checker = checker as ts.TypeChecker
   }
 
-  public getSourceFiles(): ts.SourceFile[] {
+  public getSourceFileNames(): readonly string[] {
     return this.program
       .getSourceFileNames()
       .filter(name => this.rootFiles.has(name))
-      .map(name => this.getSourceFile(name))
   }
 
   public getSourceFile(fileName: string): ts.SourceFile {
@@ -231,27 +230,22 @@ export class TsrsProgram {
       true
     )
     this.files.set(native.fileName, source)
-    this.syntaxNodes.set(
-      native.fileName,
-      TsrsProgram.collect<ts.Node>(source, node => node.kind)
-    )
-    this.nativeNodes.set(
-      native.fileName,
-      TsrsProgram.collect<NativeNode>(
-        native,
-        node => this.kinds.get(node.kind) ?? -1
-      )
-    )
+    this.ensureNodeMaps(source)
     if (this.rootFiles.has(native.fileName)) {
-      // One native request per file instead of one IPC round trip per identifier.
-      const locations = [
-        ...this.syntaxNodes.get(native.fileName)!.values(),
-      ].filter(
-        node =>
+      // Match FileIndexer's traversal: getChildren() also includes JSDoc tokens
+      // (including URLs), whose shapes differ between the two compiler ASTs.
+      const locations: ts.Node[] = []
+      const visit = (node: ts.Node): void => {
+        if (
           ts.isIdentifier(node) ||
           ts.isPrivateIdentifier(node) ||
           ts.isStringLiteralLike(node)
-      )
+        )
+          locations.push(node)
+        ts.forEachChild(node, visit)
+      }
+      visit(source)
+      // One native request per file instead of one IPC round trip per identifier.
       const symbols = this.nativeChecker.getSymbolAtLocation(
         locations.map(node => this.nativeNode(node))
       )
@@ -260,6 +254,44 @@ export class TsrsProgram {
       )
     }
     return source
+  }
+
+  public releaseFile(): void {
+    // Nodes keep their identity for cross-file symbols, but the lookup indexes
+    // are only needed while visiting a document and can be rebuilt on demand.
+    this.syntaxNodes.clear()
+    this.nativeNodes.clear()
+  }
+
+  private ensureNodeMaps(source: ts.SourceFile): void {
+    if (this.syntaxNodes.has(source.fileName)) return
+    const native = this.program.getSourceFile(source.fileName)!
+    this.syntaxNodes.set(
+      source.fileName,
+      TsrsProgram.collect<ts.Node>(source, node => node.kind)
+    )
+    this.nativeNodes.set(
+      source.fileName,
+      TsrsProgram.collect<NativeNode>(native, node => this.syntaxKind(node))
+    )
+  }
+
+  private syntaxKind(node: NativeNode): number {
+    let container = node
+    while (container.kind === SyntaxKind.QualifiedName)
+      container = container.parent
+    // TypeScript 7 uses TypeReference/QualifiedName for interface heritage and
+    // implements clauses; TypeScript 6 uses expression-shaped nodes there.
+    if (
+      container.kind === SyntaxKind.TypeReference &&
+      container.parent?.kind === SyntaxKind.HeritageClause
+    ) {
+      if (node.kind === SyntaxKind.TypeReference)
+        return ts.SyntaxKind.ExpressionWithTypeArguments
+      if (node.kind === SyntaxKind.QualifiedName)
+        return ts.SyntaxKind.PropertyAccessExpression
+    }
+    return this.kinds.get(node.kind) ?? -1
   }
 
   private static collect<
@@ -276,7 +308,7 @@ export class TsrsProgram {
 
   private nativeNode(node: ts.Node): NativeNode {
     const fileName = node.getSourceFile().fileName
-    this.getSourceFile(fileName)
+    this.ensureNodeMaps(this.getSourceFile(fileName))
     const result = this.nativeNodes
       .get(fileName)
       ?.get(`${node.getStart()}:${node.end}:${node.kind}`)
@@ -289,10 +321,10 @@ export class TsrsProgram {
 
   private syntaxNode(node: NativeNode): ts.Declaration {
     const fileName = node.getSourceFile().fileName
-    this.getSourceFile(fileName)
+    this.ensureNodeMaps(this.getSourceFile(fileName))
     const result = this.syntaxNodes
       .get(fileName)
-      ?.get(`${node.getStart()}:${node.end}:${this.kinds.get(node.kind)}`)
+      ?.get(`${node.getStart()}:${node.end}:${this.syntaxKind(node)}`)
     if (!result)
       throw new Error(
         `TypeScript AST mismatch at ${fileName}:${node.getStart()} (${SyntaxKind[node.kind]})`

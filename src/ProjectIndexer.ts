@@ -68,7 +68,10 @@ function createCompilerHost(
 }
 
 export class ProjectIndexer {
-  private program: Pick<ts.Program, 'getSourceFiles'>
+  private program: Pick<ts.Program, 'getSourceFile'> & {
+    getSourceFileNames(): readonly string[]
+    releaseFile?(): void
+  }
   private checker: ts.TypeChecker
   private symbolCache: Map<ts.Node, ScipSymbol> = new Map()
   private hasConstructor: Map<ts.ClassDeclaration, boolean> = new Map()
@@ -78,7 +81,12 @@ export class ProjectIndexer {
     public readonly config: ts.ParsedCommandLine,
     public readonly options: ProjectOptions,
     cache: GlobalCache,
-    backend?: { getSourceFiles(): ts.SourceFile[]; checker: ts.TypeChecker }
+    backend?: {
+      getSourceFileNames(): readonly string[]
+      getSourceFile(fileName: string): ts.SourceFile
+      releaseFile?(): void
+      checker: ts.TypeChecker
+    }
   ) {
     if (backend) {
       this.program = backend
@@ -86,7 +94,11 @@ export class ProjectIndexer {
     } else {
       const host = createCompilerHost(cache, config.options, options)
       const program = ts.createProgram(config.fileNames, config.options, host)
-      this.program = program
+      this.program = {
+        getSourceFileNames: () =>
+          program.getSourceFiles().map(source => source.fileName),
+        getSourceFile: fileName => program.getSourceFile(fileName),
+      }
       this.checker = program.getTypeChecker()
     }
     this.packages = new Packages(options.projectRoot)
@@ -94,21 +106,21 @@ export class ProjectIndexer {
   }
   public index(): void {
     const startTimestamp = Date.now()
-    const sourceFiles = this.program.getSourceFiles()
+    const sourceFiles = this.program.getSourceFileNames()
 
-    const filesToIndex: ts.SourceFile[] = []
+    const filesToIndex: string[] = []
     let projectFileCount = 0
     // Visit every sourceFile in the program
-    for (const sourceFile of sourceFiles) {
-      const includes = this.config.fileNames.includes(sourceFile.fileName)
+    for (const fileName of sourceFiles) {
+      const includes = this.config.fileNames.includes(fileName)
       if (!includes) {
         continue
       }
       projectFileCount++
-      if (this.indexedFiles.has(sourceFile.fileName)) {
+      if (this.indexedFiles.has(fileName)) {
         continue
       }
-      filesToIndex.push(sourceFile)
+      filesToIndex.push(fileName)
     }
 
     if (filesToIndex.length === 0) {
@@ -137,7 +149,8 @@ export class ProjectIndexer {
         )
       : undefined
     let lastWrite = startTimestamp
-    for (const [index, sourceFile] of filesToIndex.entries()) {
+    for (const [index, fileName] of filesToIndex.entries()) {
+      const sourceFile = this.program.getSourceFile(fileName)!
       const title = path.relative(this.options.cwd, sourceFile.fileName)
       jobs?.tick({ title })
       if (!this.options.progressBar) {
@@ -184,6 +197,7 @@ export class ProjectIndexer {
         // another project that includes the file can still retry it.
         this.indexedFiles.add(sourceFile.fileName)
       }
+      this.program.releaseFile?.()
     }
     jobs?.terminate()
     const elapsed = Date.now() - startTimestamp
